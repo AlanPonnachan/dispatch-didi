@@ -96,7 +96,7 @@ async def clear_db():
     await trigger_update()
     return {"success": True}
 
-# NEW: Allow human ops to resolve escalated issues from the React UI
+#Allow human ops to resolve escalated issues from the React UI
 @app.post("/api/resolve/{record_id}")
 async def resolve_exception(record_id: int):
     db = SessionLocal()
@@ -110,7 +110,10 @@ async def resolve_exception(record_id: int):
     return {"success": True}
 
 @app.post("/api/trigger-update")
-async def trigger_update():
-    payload = await get_exceptions()
-    await manager.broadcast({"type": "db_update", "data": payload})
+async def trigger_update(event_type: str = "db_update", payload: dict = None):
+    # If no payload is provided, default to sending the whole DB (for db_update)
+    if payload is None:
+        payload = await get_exceptions()
+    
+    await manager.broadcast({"type": event_type, "data": payload})
     return {"success": True}

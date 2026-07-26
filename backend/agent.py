@@ -11,12 +11,14 @@ from db import SessionLocal, ExceptionRecord, Order
 
 load_dotenv()
 
-def trigger_dashboard_update():
+async def trigger_dashboard_update(event_type="db_update", payload=None):
     try:
-        req = urllib.request.Request("http://localhost:8000/api/trigger-update", method="POST")
-        # FIX: Added .read() to ensure the HTTP request actually completes!
-        with urllib.request.urlopen(req) as response:
-            response.read()
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            json_data = {"event_type": event_type}
+            if payload:
+                json_data["payload"] = payload
+            await session.post("http://localhost:8000/api/trigger-update", params={"event_type": event_type}, json=payload)
     except Exception as e:
         print(f"Dashboard update failed: {e}")
 
@@ -47,17 +49,18 @@ class DispatchAgent(Agent):
         self.order_id = order_id
         self.has_resolved = False
         
-    async def on_enter(self):
-        self.session.generate_reply()
 
     @function_tool(description="Send an SMS to the customer about a delay.")
     async def send_sms(self, ctx: RunContext, message: str):
         print(f"\n✅ [TOOL: SMS] {self.order_id}: {message}")
+        # Broadcast to UI
+        asyncio.create_task(trigger_dashboard_update(event_type="customer_sms", payload={"order": self.order_id, "msg": message}))
         return "SMS sent."
         
     @function_tool(description="Reschedule ETA when delay is minor.")
     async def reschedule_eta(self, ctx: RunContext, extra_minutes: int):
         print(f"\n✅ [TOOL: RESCHEDULE] {self.order_id} delayed by {extra_minutes} mins.")
+        asyncio.create_task(trigger_dashboard_update(event_type="eta_update", payload={"order": self.order_id, "mins": extra_minutes}))
         return "ETA extended."
 
     @function_tool(description="Escalate to human ops manager for severe issues (spilled food, unreachable customer, accidents, safety).")
@@ -65,11 +68,12 @@ class DispatchAgent(Agent):
         if self.has_resolved: return "Already logged."
         self.has_resolved = True
         
+        # Translate to clean English for Ops
         db = SessionLocal()
-        db.add(ExceptionRecord(order_id=self.order_id, reason=reason, status="escalated", action_taken="Sent to Ops Dashboard"))
+        db.add(ExceptionRecord(order_id=self.order_id, reason=f"CRITICAL: {reason}", status="escalated", action_taken="Sent to Ops Dashboard"))
         db.commit()
         db.close()
-        trigger_dashboard_update()
+        asyncio.create_task(trigger_dashboard_update())
         return "Escalated to ops team."
 
     @function_tool(description="Log that you Autonomous Resolved a minor issue (flat tire, traffic, minor delays).")
@@ -78,10 +82,10 @@ class DispatchAgent(Agent):
         self.has_resolved = True
         
         db = SessionLocal()
-        db.add(ExceptionRecord(order_id=self.order_id, reason=resolution_details, status="resolved_autonomously", action_taken="Autonomous API Chaining"))
+        db.add(ExceptionRecord(order_id=self.order_id, reason=f"RESOLVED: {resolution_details}", status="resolved_autonomously", action_taken="AI Waived Penalty"))
         db.commit()
         db.close()
-        trigger_dashboard_update()
+        asyncio.create_task(trigger_dashboard_update())
         return "Logged resolution successfully."
 
 async def entrypoint(ctx: JobContext):
@@ -123,7 +127,7 @@ async def entrypoint(ctx: JobContext):
         f"CRITICAL RULES:\n"
         f"{greeting_rule}\n"
         f"2. EMOTIONAL INTELLIGENCE (L5 Voice): If the partner sounds frantic, panicked, or angry, speak slowly and calmly. Immediately reassure them that their penalty is waived before asking for details.\n"
-        f"3. BUSINESS ROUTING (L5 JTBD): Do not follow a rigid script. Listen to the issue and apply these business rules to choose ONE tool:\n"
+        f"3. BUSINESS ROUTING (L5 JTBD): Listen to the issue and apply these business rules to choose ONE tool (DO NOT mention 'Rule A' or 'Rule B' in your tool inputs, just summarize the facts cleanly):\n"
         f"   - Rule A (Recoverable by Partner): Traffic, flat tires, weather, minor delays. -> Use `log_autonomous_resolution` and tell them the penalty is waived.\n"
         f"   - Rule B (Customer Fault or Severe): Unreachable customer, wrong address, spilled/damaged food, accidents, safety. -> Use `escalate_to_human` to alert the Ops Manager.\n"
         f"   - Rule C (Simple Time Extension): -> Use `reschedule_eta`.\n"
@@ -141,9 +145,12 @@ async def entrypoint(ctx: JobContext):
         tts=sarvam.TTS(target_language_code=language_code, model="bulbul:v3", speaker="priya")
     )
 
-    # L5 Voice: min_endpointing_delay tuned up slightly to 0.5s to handle partner hesitation/stuttering without cutting them off
+    # L5 Voice: min_endpointing_delay tuned up slightly to 0.5s
     session = AgentSession(turn_detection="stt", min_endpointing_delay=0.5)
     await session.start(agent=agent, room=ctx.room)
+    
+    #Force Didi to speak her greeting rule immediately!
+    session.generate_reply()
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

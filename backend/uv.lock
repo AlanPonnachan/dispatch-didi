@@ -160,6 +160,7 @@ name = "backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "fastapi" },
     { name = "livekit-agents", extra = ["sarvam", "silero"] },
     { name = "python-dotenv" },
@@ -169,6 +170,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "fastapi", specifier = ">=0.140.0" },
     { name = "livekit-agents", extras = ["sarvam", "silero"], specifier = ">=1.6.7" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
