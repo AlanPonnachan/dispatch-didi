@@ -1,5 +1,7 @@
+# backend/main.py
 import os
 import json
+import uuid  # NEW: For unique rooms
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Real-world WebSocket Manager for Ops Dashboard
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -32,16 +33,15 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
-            await connection.send_json(message)
+            try:
+                await connection.send_json(message)
+            except:
+                pass
 
 manager = ConnectionManager()
 
 @app.get("/api/token")
-async def get_token(order_id: str = "ORD1042"):
-    """
-    Generates a secure LiveKit token for the frontend to connect to the audio room.
-    This is where CONTEXT INJECTION happens. We attach the order_id to the participant.
-    """
+async def get_token(order_id: str = "ORD1042", language: str = "hi-IN"):
     token = api.AccessToken(
         os.getenv("LIVEKIT_API_KEY", "devkey"),
         os.getenv("LIVEKIT_API_SECRET", "secret")
@@ -49,42 +49,38 @@ async def get_token(order_id: str = "ORD1042"):
     token.with_identity(f"worker_{order_id}")
     token.with_name("Delivery Worker")
     
-    # FIX: Added publish and subscribe permissions so audio can flow both ways
+    # FIX: Generate a unique room for every single call so the AI always wakes up!
+    unique_room_name = f"dispatch-{uuid.uuid4().hex[:8]}"
+    
     token.with_grants(api.VideoGrants(
         room_join=True,
-        room="dispatch-room",
+        room=unique_room_name,
         can_publish=True,
         can_subscribe=True,
         can_publish_data=True,
     ))
     
-    # Injecting the context so the AI knows who is calling!
-    token.with_metadata(order_id)
+    # Inject both Order ID and Language Preference
+    metadata = json.dumps({"order_id": order_id, "language": language})
+    token.with_metadata(metadata)
     
     return {"token": token.to_jwt()}
 
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for the React Dashboard to listen for DB updates"""
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive, wait for incoming empty messages
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-@app.post("/api/trigger-update")
-async def trigger_update():
-    """
-    The Agent (agent.py) will call this locally when it logs a resolution, 
-    telling the FastAPI server to fetch the latest DB rows and push to React.
-    """
+@app.get("/api/exceptions")
+async def get_exceptions():
     db = SessionLocal()
-    records = db.query(ExceptionRecord).order_by(ExceptionRecord.created_at.desc()).limit(10).all()
+    records = db.query(ExceptionRecord).order_by(ExceptionRecord.created_at.desc()).limit(15).all()
     db.close()
-    
-    payload = [{
+    return [{
         "id": r.id,
         "order_id": r.order_id,
         "reason": r.reason,
@@ -92,6 +88,18 @@ async def trigger_update():
         "action_taken": r.action_taken,
         "created_at": r.created_at.isoformat()
     } for r in records]
-    
+
+@app.post("/api/clear-db")
+async def clear_db():
+    db = SessionLocal()
+    db.query(ExceptionRecord).delete()
+    db.commit()
+    db.close()
+    await trigger_update()
+    return {"success": True}
+
+@app.post("/api/trigger-update")
+async def trigger_update():
+    payload = await get_exceptions()
     await manager.broadcast({"type": "db_update", "data": payload})
     return {"success": True}

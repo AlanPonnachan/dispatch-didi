@@ -1,15 +1,25 @@
+// frontend/src/App.tsx
 import React, { useState, useEffect } from 'react';
 import { LiveKitRoom, useVoiceAssistant, BarVisualizer, RoomAudioRenderer, VoiceAssistantControlBar } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Phone, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
+import { Phone, CheckCircle2, AlertTriangle, Clock, Trash2 } from 'lucide-react';
 
 export default function App() {
   const [token, setToken] = useState("");
   const [orderId, setOrderId] = useState("ORD1042");
+  const [language, setLanguage] = useState("hi-IN");
   const [connected, setConnected] = useState(false);
   const [dashboardLogs, setDashboardLogs] = useState([]);
 
-  // WebSocket for Ops Dashboard Updates
+  // Fetch initial data on mount
+  useEffect(() => {
+    fetch("http://localhost:8000/api/exceptions")
+      .then(res => res.json())
+      .then(data => setDashboardLogs(data))
+      .catch(err => console.error("Failed to fetch initial logs", err));
+  }, []);
+
+  // WebSocket for real-time updates
   useEffect(() => {
     const ws = new WebSocket("ws://localhost:8000/ws/dashboard");
     ws.onmessage = (event) => {
@@ -22,17 +32,22 @@ export default function App() {
   }, []);
 
   const startCall = async () => {
-    // Fetch token from our FastAPI backend
-    const res = await fetch(`http://localhost:8000/api/token?order_id=${orderId}`);
+    // Send both order_id and language
+    const res = await fetch(`http://localhost:8000/api/token?order_id=${orderId}&language=${language}`);
     const data = await res.json();
     setToken(data.token);
     setConnected(true);
   };
 
+  const clearDatabase = async () => {
+    await fetch("http://localhost:8000/api/clear-db", { method: "POST" });
+    // The WS will auto-broadcast the empty state back to us
+  };
+
   return (
     <div className="flex h-screen w-full bg-slate-50">
       
-      {/* LEFT SIDE: Worker App Simulator (Mobile Phone Shape) */}
+      {/* LEFT SIDE: Worker App Simulator */}
       <div className="w-1/3 p-8 flex flex-col items-center justify-center border-r border-slate-200 bg-white">
         <div className="w-[320px] h-[650px] border-8 border-slate-900 rounded-[3rem] p-6 flex flex-col relative shadow-2xl overflow-hidden">
           
@@ -43,16 +58,33 @@ export default function App() {
 
           {!connected ? (
             <div className="flex-1 flex flex-col items-center justify-center">
-              <div className="bg-blue-50 p-4 rounded-xl mb-8 w-full text-center">
-                <p className="font-semibold text-blue-900">Deliver to Ramesh</p>
-                <select 
-                  className="mt-2 text-sm bg-white border border-blue-200 rounded p-1"
-                  value={orderId}
-                  onChange={(e) => setOrderId(e.target.value)}
-                >
-                  <option value="ORD1042">Order 1042</option>
-                  <option value="ORD1043">Order 1043</option>
-                </select>
+              
+              {/* CUSTOM CONTROLS */}
+              <div className="bg-blue-50 p-4 rounded-xl mb-8 w-full flex flex-col gap-3">
+                <div>
+                  <label className="text-xs font-bold text-blue-900 uppercase">Order ID</label>
+                  <input 
+                    type="text"
+                    className="w-full mt-1 text-sm bg-white border border-blue-200 rounded p-2 focus:outline-blue-500"
+                    value={orderId}
+                    onChange={(e) => setOrderId(e.target.value.toUpperCase())}
+                    placeholder="E.g. ORD1042"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-blue-900 uppercase">My Language</label>
+                  <select 
+                    className="w-full mt-1 text-sm bg-white border border-blue-200 rounded p-2 focus:outline-blue-500"
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                  >
+                    <option value="hi-IN">Hindi / Hinglish</option>
+                    <option value="en-IN">English</option>
+                    <option value="ml-IN">Malayalam</option>
+                    <option value="kn-IN">Kannada</option>
+                    <option value="ta-IN">Tamil</option>
+                  </select>
+                </div>
               </div>
               
               <button 
@@ -68,7 +100,7 @@ export default function App() {
               token={token}
               serverUrl="ws://localhost:7880"
               connect={true}
-              audio={true} /* THIS IS THE MAGIC FIX */
+              audio={true}
               onDisconnected={() => setConnected(false)}
               className="flex-1 flex flex-col"
             >
@@ -80,9 +112,20 @@ export default function App() {
       </div>
 
       {/* RIGHT SIDE: Ops Dashboard */}
-      <div className="w-2/3 p-8 bg-slate-50 overflow-y-auto">
-        <h1 className="text-3xl font-bold text-slate-800 mb-2">Dispatch Control Tower</h1>
-        <p className="text-slate-500 mb-8">Live exception monitoring across the fleet.</p>
+      <div className="w-2/3 p-8 bg-slate-50 flex flex-col">
+        <div className="flex justify-between items-end mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-800 mb-2">Dispatch Control Tower</h1>
+            <p className="text-slate-500">Live exception monitoring across the fleet.</p>
+          </div>
+          <button 
+            onClick={clearDatabase}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors"
+          >
+            <Trash2 size={16} />
+            <span>Clear Logs</span>
+          </button>
+        </div>
 
         <div className="grid grid-cols-2 gap-6 mb-8">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
@@ -106,7 +149,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex-1">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
@@ -148,7 +191,6 @@ export default function App() {
   );
 }
 
-// Sub-component for the Active Call visualizer
 function ActiveCallView() {
   const { state, audioTrack } = useVoiceAssistant();
   
