@@ -90,7 +90,7 @@ async def entrypoint(ctx: JobContext):
     try:
         participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=15.0)
     except asyncio.TimeoutError:
-        print("⚠️ Worker didn't join in time.")
+        print("⚠️ Delivery Partner didn't join in time.")
         participant = None
 
     order_id = "ORD1042"
@@ -113,35 +113,36 @@ async def entrypoint(ctx: JobContext):
     }
     spoken_lang = lang_map.get(language_code, "Hindi/Hinglish")
     
-    print(f"👤 Worker joined! Order: {order_id} | Language: {spoken_lang}\n")
+    print(f"👤 Delivery Partner joined! Order: {order_id} | Language: {spoken_lang}\n")
 
-    # FIX: Get dynamic memory and greeting rule
     memory_state, greeting_rule = get_memory_context(order_id, spoken_lang)
 
     system_prompt = (
-        f"You are Dispatch Didi, an AI ops-copilot for delivery partners.\n"
+        f"You are Dispatch Didi, an empowered AI ops-copilot for Quick Commerce Delivery Partners.\n"
         f"{memory_state}\n"
         f"CRITICAL RULES:\n"
         f"{greeting_rule}\n"
-        f"2. MULTI-TURN CLARIFICATION: If the worker's issue is vague (e.g., 'I have a problem'), ask a short clarifying question first.\n"
-        f"3. EMPOWERED DECISION MAKING: Once the issue is clear, use a tool:\n"
-        f"   - `escalate_to_human`: Severe issues (unreachable customers, damaged/spilled goods, accidents, safety).\n"
-        f"   - `log_autonomous_resolution`: Recoverable issues (flat tires, minor vehicle issues). Tell them you waived the penalty.\n"
-        f"   - `reschedule_eta`: Simple delays (traffic, weather).\n"
-        f"4. ACTIONS FIRST: Call the correct tool as soon as you understand the problem.\n"
-        f"5. LANGUAGE: Always reply naturally in {spoken_lang}.\n"
-        f"6. BREVITY: Keep spoken responses to 1 short sentence."
+        f"2. EMOTIONAL INTELLIGENCE (L5 Voice): If the partner sounds frantic, panicked, or angry, speak slowly and calmly. Immediately reassure them that their penalty is waived before asking for details.\n"
+        f"3. BUSINESS ROUTING (L5 JTBD): Do not follow a rigid script. Listen to the issue and apply these business rules to choose ONE tool:\n"
+        f"   - Rule A (Recoverable by Partner): Traffic, flat tires, weather, minor delays. -> Use `log_autonomous_resolution` and tell them the penalty is waived.\n"
+        f"   - Rule B (Customer Fault or Severe): Unreachable customer, wrong address, spilled/damaged food, accidents, safety. -> Use `escalate_to_human` to alert the Ops Manager.\n"
+        f"   - Rule C (Simple Time Extension): -> Use `reschedule_eta`.\n"
+        f"4. ACTIONS FIRST: Do not say 'I am logging this.' Just call the tool and then speak the confirmation.\n"
+        f"5. LANGUAGE: Always reply naturally in {spoken_lang}. If they mix English and Hindi, match their style naturally.\n"
+        f"6. BREVITY: Deliver your response in 1 or 2 concise sentences."
     )
 
     agent = DispatchAgent(
         order_id=order_id,
         instructions=system_prompt,
+        # L5 Voice: flush_signal=True ensures we handle noisy environments well
         stt=sarvam.STT(language="unknown", model="saaras:v3", mode="transcribe", flush_signal=True),
         llm=sarvam.LLM(model="sarvam-105b"),
         tts=sarvam.TTS(target_language_code=language_code, model="bulbul:v3", speaker="priya")
     )
 
-    session = AgentSession(turn_detection="stt", min_endpointing_delay=0.07)
+    # L5 Voice: min_endpointing_delay tuned up slightly to 0.5s to handle partner hesitation/stuttering without cutting them off
+    session = AgentSession(turn_detection="stt", min_endpointing_delay=0.5)
     await session.start(agent=agent, room=ctx.room)
 
 if __name__ == "__main__":

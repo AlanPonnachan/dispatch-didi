@@ -157,8 +157,9 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex-1">
-          <table className="w-full text-left border-collapse">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex-1 min-h-0 flex flex-col">
+          <div className="overflow-y-auto flex-1">
+            <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="p-4 text-sm font-semibold text-slate-600">Order</th>
@@ -200,6 +201,7 @@ export default function App() {
               )}
             </tbody>
           </table>
+         </div>
         </div>
       </div>
     </div>
