@@ -90,31 +90,52 @@ class DispatchAgent(Agent):
         asyncio.create_task(asyncio.to_thread(trigger_dashboard_update, "db_update", None))
         return f"ETA successfully extended by {extra_minutes} minutes."
 
-    @function_tool(description="Escalate to human ops manager for severe issues (spilled food, unreachable customer, accidents, safety).")
+    @function_tool(description="Escalate to human ops manager for severe issues (spilled food, unreachable customer, accidents).")
     async def escalate_to_human(self, ctx: RunContext, reason: str):
-        if self.has_resolved: return "Already logged."
-        self.has_resolved = True
-        
+        print(f"\n✅ [TOOL: ESCALATE] {self.order_id}: {reason}")
         db = SessionLocal()
-        db.add(ExceptionRecord(order_id=self.order_id, reason=f"CRITICAL: {reason}", status="escalated", action_taken="Sent to Ops Dashboard"))
+        
+        # Look for existing record for this order
+        existing_record = db.query(ExceptionRecord).filter(
+            ExceptionRecord.order_id == self.order_id
+        ).order_by(ExceptionRecord.created_at.desc()).first()
+        
+        if existing_record:
+            existing_record.status = "escalated"
+            existing_record.reason = f"CRITICAL: {reason}"
+            existing_record.action_taken = "Sent to Ops Dashboard"
+        else:
+            db.add(ExceptionRecord(order_id=self.order_id, reason=f"CRITICAL: {reason}", status="escalated", action_taken="Sent to Ops Dashboard"))
+            
         db.commit()
         db.close()
         
         asyncio.create_task(asyncio.to_thread(trigger_dashboard_update, "db_update", None))
         return "Escalated to ops team."
 
-    @function_tool(description="Log that you Autonomous Resolved a minor issue (flat tire, traffic, minor delays).")
+    @function_tool(description="Log that an issue is resolved autonomously, OR De-escalate if the partner fixed the issue themselves.")
     async def log_autonomous_resolution(self, ctx: RunContext, resolution_details: str):
-        if self.has_resolved: return "Already resolved."
-        self.has_resolved = True
-        
+        print(f"\n✅ [TOOL: AUTONOMOUS/DE-ESCALATE] {self.order_id}: {resolution_details}")
         db = SessionLocal()
-        db.add(ExceptionRecord(order_id=self.order_id, reason=f"RESOLVED: {resolution_details}", status="resolved_autonomously", action_taken="AI Waived Penalty"))
+        
+        # Look for existing record (even if it was previously escalated)
+        existing_record = db.query(ExceptionRecord).filter(
+            ExceptionRecord.order_id == self.order_id
+        ).order_by(ExceptionRecord.created_at.desc()).first()
+        
+        if existing_record:
+            # OVERRIDE the escalation! The AI changed its mind.
+            existing_record.status = "resolved_autonomously"
+            existing_record.reason = f"RESOLVED: {resolution_details}"
+            existing_record.action_taken = "AI De-escalated (Partner Fixed)"
+        else:
+            db.add(ExceptionRecord(order_id=self.order_id, reason=f"RESOLVED: {resolution_details}", status="resolved_autonomously", action_taken="AI Waived Penalty"))
+            
         db.commit()
         db.close()
         
         asyncio.create_task(asyncio.to_thread(trigger_dashboard_update, "db_update", None))
-        return "Logged resolution successfully."
+        return "Logged resolution or De-escalation successfully."
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
@@ -159,6 +180,7 @@ async def entrypoint(ctx: JobContext):
         f"   - Traffic, minor delays -> Use `reschedule_eta`.\n"
         f"   - Flat tire, vehicle fault -> Use `log_autonomous_resolution`.\n"
         f"   - Customer fault, accident, spill -> Use `escalate_to_human`.\n"
+        f"   - DE-ESCALATION: If you already escalated, but the partner says 'Wait, it is fixed' (e.g. customer arrived), use `log_autonomous_resolution` to de-escalate the ticket.\n"
         f"4. ACTIONS FIRST: Do not say 'I am logging this.' Just call the tool and then speak the confirmation.\n"
         f"5. LANGUAGE: Always reply naturally in {spoken_lang}. If they mix English and Hindi, match their style naturally.\n"
         f"6. BREVITY: Deliver your response in 1 or 2 concise sentences."

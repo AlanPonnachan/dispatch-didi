@@ -165,7 +165,7 @@ export default function App() {
         <div className="flex justify-between items-center px-2">
           <div>
             <h1 className="text-2xl font-black text-slate-800 tracking-tight">Dispatch Control Tower</h1>
-            <p className="text-sm text-slate-500 font-medium">Autonomous Exception Engine v2.0</p>
+            {/* <p className="text-sm text-slate-500 font-medium">Autonomous Exception Engine v2.0</p> */}
           </div>
           
           {/* 🚨 NEW: Added Refresh Button next to Reset Demo */}
