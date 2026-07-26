@@ -63,18 +63,26 @@ class DispatchAgent(Agent):
         
     @function_tool(description="Reschedule ETA when delay is minor.")
     async def reschedule_eta(self, ctx: RunContext, extra_minutes: int):
-        # didi is now allowed to update the ETA multiple times if you change your mind mid-sentence.
-        self.has_resolved = True 
-        
         print(f"\n✅ [TOOL: RESCHEDULE] {self.order_id} delayed by {extra_minutes} mins.")
         
         db = SessionLocal()
-        db.add(ExceptionRecord(
-            order_id=self.order_id, 
-            reason=f"RESOLVED: Traffic/minor delay of {extra_minutes} mins.", 
-            status="resolved_autonomously", 
-            action_taken=f"Extended ETA by {extra_minutes}m"
-        ))
+        existing_record = db.query(ExceptionRecord).filter(
+            ExceptionRecord.order_id == self.order_id,
+            ExceptionRecord.status == "resolved_autonomously"
+        ).order_by(ExceptionRecord.created_at.desc()).first()
+        
+        if existing_record:
+            existing_record.reason = f"RESOLVED: Traffic/minor delay of {extra_minutes} mins."
+            existing_record.action_taken = f"Extended ETA by {extra_minutes}m"
+        else:
+            # INSERT a new row
+            db.add(ExceptionRecord(
+                order_id=self.order_id, 
+                reason=f"RESOLVED: Traffic/minor delay of {extra_minutes} mins.", 
+                status="resolved_autonomously", 
+                action_taken=f"Extended ETA by {extra_minutes}m"
+            ))
+            
         db.commit()
         db.close()
         

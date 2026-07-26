@@ -34,10 +34,17 @@ export default function App() {
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === "db_update") {
-          // 🚨 FIX: Force a clean REST fetch whenever the DB changes!
           fetchLogs();
         } else if (msg.type === "customer_sms" || msg.type === "eta_update") {
-          setLiveEvents(prev => [{...msg.data, type: msg.type, time: new Date().toLocaleTimeString()}, ...prev].slice(0, 5));
+          setLiveEvents(prev => {
+            const newEvent = {...msg.data, type: msg.type, time: new Date().toLocaleTimeString()};
+            
+            if (prev.length > 0 && prev[0].order === newEvent.order && prev[0].type === newEvent.type && prev[0].mins === newEvent.mins) {
+              return prev;
+            }
+            
+            return [newEvent, ...prev].slice(0, 5);
+          });
         }
       };
       ws.onclose = () => { if (!isUnmounted) setTimeout(connectWs, 2000); };
