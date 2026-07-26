@@ -3,11 +3,12 @@ import os
 import json
 import uuid
 import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 from livekit import api
 from dotenv import load_dotenv
 from db import SessionLocal, ExceptionRecord
+from tying import Any
 
 load_dotenv()
 
@@ -109,11 +110,12 @@ async def resolve_exception(record_id: int):
     await trigger_update()
     return {"success": True}
 
+
 @app.post("/api/trigger-update")
-async def trigger_update(event_type: str = "db_update", payload: dict = None):
-    # If no payload is provided, default to sending the whole DB (for db_update)
-    if payload is None:
+async def trigger_update(event_type: str = "db_update", payload: Any = Body(default=None)):
+    # FORCE it to fetch the database array if it's a db_update event!
+    if event_type == "db_update" or not payload:
         payload = await get_exceptions()
-    
+        
     await manager.broadcast({"type": event_type, "data": payload})
     return {"success": True}
