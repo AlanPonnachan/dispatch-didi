@@ -1,11 +1,13 @@
+# backend/agent.py
 import os
 import urllib.request
+import asyncio
+# FIX: Removed TurnHandlingOptions from imports
 from livekit.agents import JobContext, WorkerOptions, cli, function_tool, RunContext
 from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import sarvam
 from dotenv import load_dotenv
 from db import SessionLocal, ExceptionRecord
-import asyncio
 
 load_dotenv()
 
@@ -25,6 +27,11 @@ class DispatchAgent(Agent):
             **kwargs
         )
         self.order_id = order_id
+        
+    # FIX: Make the agent speak first so the worker knows it's connected
+    async def on_enter(self):
+        print(f"👋 Agent greeting worker for order {self.order_id}")
+        self.session.generate_reply()
 
     @function_tool(description="Send an SMS to the customer about a delay, wrong address, or vehicle breakdown.")
     async def send_sms(self, ctx: RunContext, message: str):
@@ -62,8 +69,6 @@ class DispatchAgent(Agent):
         db.close()
         trigger_dashboard_update()
         return "Logged resolution successfully."
-
-
 
 async def entrypoint(ctx: JobContext):
     # 1. Connect to the room 
@@ -112,12 +117,13 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
+    # FIX: Pass turn_detection directly to AgentSession, removing TurnHandlingOptions
     session = AgentSession(
         turn_detection="stt",
         min_endpointing_delay=0.07 
     )
     
-    # 4. Start the session! (This is what actually wakes the AI up)
+    # 4. Start the session!
     await session.start(agent=agent, room=ctx.room)
     print("✅ Dispatch Didi is awake and listening!")
 

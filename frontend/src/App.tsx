@@ -68,6 +68,7 @@ export default function App() {
               token={token}
               serverUrl="ws://localhost:7880"
               connect={true}
+              audio={true} /* THIS IS THE MAGIC FIX */
               onDisconnected={() => setConnected(false)}
               className="flex-1 flex flex-col"
             >

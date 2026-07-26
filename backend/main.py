@@ -48,10 +48,16 @@ async def get_token(order_id: str = "ORD1042"):
     )
     token.with_identity(f"worker_{order_id}")
     token.with_name("Delivery Worker")
+    
+    # FIX: Added publish and subscribe permissions so audio can flow both ways
     token.with_grants(api.VideoGrants(
         room_join=True,
         room="dispatch-room",
+        can_publish=True,
+        can_subscribe=True,
+        can_publish_data=True,
     ))
+    
     # Injecting the context so the AI knows who is calling!
     token.with_metadata(order_id)
     
