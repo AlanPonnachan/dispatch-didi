@@ -1,7 +1,7 @@
 # backend/main.py
 import os
 import json
-import uuid  # NEW: For unique rooms
+import uuid
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +49,6 @@ async def get_token(order_id: str = "ORD1042", language: str = "hi-IN"):
     token.with_identity(f"worker_{order_id}")
     token.with_name("Delivery Worker")
     
-    # FIX: Generate a unique room for every single call so the AI always wakes up!
     unique_room_name = f"dispatch-{uuid.uuid4().hex[:8]}"
     
     token.with_grants(api.VideoGrants(
@@ -60,7 +59,6 @@ async def get_token(order_id: str = "ORD1042", language: str = "hi-IN"):
         can_publish_data=True,
     ))
     
-    # Inject both Order ID and Language Preference
     metadata = json.dumps({"order_id": order_id, "language": language})
     token.with_metadata(metadata)
     
@@ -78,7 +76,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/exceptions")
 async def get_exceptions():
     db = SessionLocal()
-    records = db.query(ExceptionRecord).order_by(ExceptionRecord.created_at.desc()).limit(15).all()
+    records = db.query(ExceptionRecord).order_by(ExceptionRecord.created_at.desc()).limit(50).all()
     db.close()
     return [{
         "id": r.id,
@@ -94,6 +92,19 @@ async def clear_db():
     db = SessionLocal()
     db.query(ExceptionRecord).delete()
     db.commit()
+    db.close()
+    await trigger_update()
+    return {"success": True}
+
+# NEW: Allow human ops to resolve escalated issues from the React UI
+@app.post("/api/resolve/{record_id}")
+async def resolve_exception(record_id: int):
+    db = SessionLocal()
+    record = db.query(ExceptionRecord).filter(ExceptionRecord.id == record_id).first()
+    if record:
+        record.status = "resolved_by_human"
+        record.action_taken = "Human Ops Intervention"
+        db.commit()
     db.close()
     await trigger_update()
     return {"success": True}

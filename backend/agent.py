@@ -14,32 +14,43 @@ load_dotenv()
 def trigger_dashboard_update():
     try:
         req = urllib.request.Request("http://localhost:8000/api/trigger-update", method="POST")
-        urllib.request.urlopen(req)
+        # FIX: Added .read() to ensure the HTTP request actually completes!
+        with urllib.request.urlopen(req) as response:
+            response.read()
     except Exception as e:
-        pass
+        print(f"Dashboard update failed: {e}")
 
-def get_memory_context(order_id: str):
+# FIX: Return dynamic Greeting Rule so it doesn't ask "what is the issue" on callbacks
+def get_memory_context(order_id: str, spoken_lang: str):
     db = SessionLocal()
-    order = db.query(Order).filter(Order.order_id == order_id).first()
     last_exception = db.query(ExceptionRecord).filter(ExceptionRecord.order_id == order_id).order_by(ExceptionRecord.created_at.desc()).first()
     db.close()
     
-    context = f"Order Context: Customer is {order.customer_name if order else 'Unknown'}, Address is {order.address if order else 'Unknown'}.\n"
-    if last_exception:
-        context += f"⚠️ CRITICAL MEMORY: Worker previously reported: '{last_exception.reason}'. Status is '{last_exception.status}'.\n"
-        context += f"IF THEY ARE CALLING ABOUT THIS AGAIN: Do not use any tools. Just politely tell them 'Ops team is already looking into your {last_exception.status} issue, please wait' and end your turn.\n"
-    return context
+    if not last_exception:
+        greeting = f"1. GREETING: On your first turn, say a quick 'Hello' in {spoken_lang} and ask what the issue is."
+        return "Context: No previous issues.", greeting
+        
+    if last_exception.status == "resolved_by_human":
+        greeting = f"1. GREETING: On your first turn, say in {spoken_lang}: 'Hello, good news! The Ops team has resolved your issue regarding {last_exception.reason}. You can continue.' DO NOT ask what the issue is. DO NOT use tools."
+        return f"⚠️ CRITICAL MEMORY: The worker previously had an issue ('{last_exception.reason}'). The Human Ops team has just RESOLVED it.", greeting
+    
+    if last_exception.status == "escalated":
+        greeting = f"1. GREETING: On your first turn, say in {spoken_lang}: 'Hello, the Ops team is still looking into your issue regarding {last_exception.reason}. Please wait.' DO NOT ask what the issue is. DO NOT use tools."
+        return f"⚠️ CRITICAL MEMORY: The worker reported an issue ('{last_exception.reason}') which is currently ESCALATED.", greeting
+                
+    greeting = f"1. GREETING: On your first turn, say in {spoken_lang}: 'Hello, your issue regarding {last_exception.reason} was already logged and penalty waived. Help is on the way.' DO NOT ask what the issue is. DO NOT use tools."
+    return f"⚠️ CRITICAL MEMORY: The worker reported ('{last_exception.reason}') and you already resolved it.", greeting
 
 class DispatchAgent(Agent):
     def __init__(self, order_id: str, instructions: str, **kwargs):
         super().__init__(instructions=instructions, **kwargs)
         self.order_id = order_id
-        self.has_resolved = False # Lock to prevent duplicate rows
+        self.has_resolved = False
         
     async def on_enter(self):
         self.session.generate_reply()
 
-    @function_tool(description="Send an SMS to the customer about a delay, wrong address, or vehicle breakdown.")
+    @function_tool(description="Send an SMS to the customer about a delay.")
     async def send_sms(self, ctx: RunContext, message: str):
         print(f"\n✅ [TOOL: SMS] {self.order_id}: {message}")
         return "SMS sent."
@@ -49,7 +60,7 @@ class DispatchAgent(Agent):
         print(f"\n✅ [TOOL: RESCHEDULE] {self.order_id} delayed by {extra_minutes} mins.")
         return "ETA extended."
 
-    @function_tool(description="Escalate to human ops manager for severe issues (accidents, uncooperative customers, damaged goods, safety threats).")
+    @function_tool(description="Escalate to human ops manager for severe issues (spilled food, unreachable customer, accidents, safety).")
     async def escalate_to_human(self, ctx: RunContext, reason: str):
         if self.has_resolved: return "Already logged."
         self.has_resolved = True
@@ -61,7 +72,7 @@ class DispatchAgent(Agent):
         trigger_dashboard_update()
         return "Escalated to ops team."
 
-    @function_tool(description="Log that you Autonomous Resolved a minor issue (vehicle breakdown where recovery can be sent, minor delays, traffic).")
+    @function_tool(description="Log that you Autonomous Resolved a minor issue (flat tire, traffic, minor delays).")
     async def log_autonomous_resolution(self, ctx: RunContext, resolution_details: str):
         if self.has_resolved: return "Already resolved."
         self.has_resolved = True
@@ -73,16 +84,14 @@ class DispatchAgent(Agent):
         trigger_dashboard_update()
         return "Logged resolution successfully."
 
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
     
-    participant = None
-    for _ in range(50): 
-        if ctx.room.remote_participants:
-            participant = list(ctx.room.remote_participants.values())[0]
-            break
-        await asyncio.sleep(0.1)
+    try:
+        participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=15.0)
+    except asyncio.TimeoutError:
+        print("⚠️ Worker didn't join in time.")
+        participant = None
 
     order_id = "ORD1042"
     language_code = "hi-IN"
@@ -93,7 +102,7 @@ async def entrypoint(ctx: JobContext):
             order_id = meta.get("order_id", "ORD1042")
             language_code = meta.get("language", "hi-IN")
         except json.JSONDecodeError:
-            order_id = participant.metadata
+            pass
 
     lang_map = {
         "hi-IN": "Hindi/Hinglish",
@@ -106,45 +115,33 @@ async def entrypoint(ctx: JobContext):
     
     print(f"👤 Worker joined! Order: {order_id} | Language: {spoken_lang}\n")
 
-    memory_state = get_memory_context(order_id)
+    # FIX: Get dynamic memory and greeting rule
+    memory_state, greeting_rule = get_memory_context(order_id, spoken_lang)
 
     system_prompt = (
         f"You are Dispatch Didi, an AI ops-copilot for delivery partners.\n"
         f"{memory_state}\n"
         f"CRITICAL RULES:\n"
-        f"1. GREETING: On your first turn, say a quick 'Hello' in {spoken_lang} and ask about the issue. DO NOT call a tool yet.\n"
-        f"2. EMPOWERED DECISION MAKING: Listen to the worker's issue and use your judgment to pick the right tool:\n"
-        f"   - Use `escalate_to_human` for severe or unresolvable issues (e.g., unreachable customers, damaged/spilled goods, accidents, police issues, safety concerns).\n"
-        f"   - Use `log_autonomous_resolution` (and `send_sms` if needed) for recoverable issues (e.g., flat tires, minor vehicle issues). Tell them you waived the penalty.\n"
-        f"   - Use `reschedule_eta` for simple delays (traffic, weather, minor detours).\n"
-        f"3. ACTIONS FIRST: Call the correct tool as soon as you understand the problem.\n"
-        f"4. LANGUAGE: Always reply naturally in {spoken_lang}.\n"
-        f"5. BREVITY: Keep spoken responses to 1 short sentence."
+        f"{greeting_rule}\n"
+        f"2. MULTI-TURN CLARIFICATION: If the worker's issue is vague (e.g., 'I have a problem'), ask a short clarifying question first.\n"
+        f"3. EMPOWERED DECISION MAKING: Once the issue is clear, use a tool:\n"
+        f"   - `escalate_to_human`: Severe issues (unreachable customers, damaged/spilled goods, accidents, safety).\n"
+        f"   - `log_autonomous_resolution`: Recoverable issues (flat tires, minor vehicle issues). Tell them you waived the penalty.\n"
+        f"   - `reschedule_eta`: Simple delays (traffic, weather).\n"
+        f"4. ACTIONS FIRST: Call the correct tool as soon as you understand the problem.\n"
+        f"5. LANGUAGE: Always reply naturally in {spoken_lang}.\n"
+        f"6. BREVITY: Keep spoken responses to 1 short sentence."
     )
 
     agent = DispatchAgent(
         order_id=order_id,
         instructions=system_prompt,
-        stt=sarvam.STT(
-            language="unknown", 
-            model="saaras:v3",
-            mode="transcribe",
-            flush_signal=True 
-        ),
-        # FIX: Switched back to 105b for L5-level reasoning and edge-case handling!
+        stt=sarvam.STT(language="unknown", model="saaras:v3", mode="transcribe", flush_signal=True),
         llm=sarvam.LLM(model="sarvam-105b"),
-        tts=sarvam.TTS(
-            target_language_code=language_code,
-            model="bulbul:v3",
-            speaker="priya" 
-        )
+        tts=sarvam.TTS(target_language_code=language_code, model="bulbul:v3", speaker="priya")
     )
 
-    session = AgentSession(
-        turn_detection="stt",
-        min_endpointing_delay=0.07 
-    )
-    
+    session = AgentSession(turn_detection="stt", min_endpointing_delay=0.07)
     await session.start(agent=agent, room=ctx.room)
 
 if __name__ == "__main__":
